@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>2D RPG</title>
+  <style>
+    :root {
+      --bg: #101820;
+      --panel: #1b2a35;
+      --panel2: #213944;
+      --accent: #7fd1b9;
+      --accent2: #f6d365;
+      --danger: #ff6b6b;
+      --text: #ebf8ff;
+      --shadow: rgba(0, 0, 0, 0.35);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: radial-gradient(circle at top, #243b4a, var(--bg));
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    .game-shell {
+      width: min(94vw, 980px);
+      background: rgba(12, 21, 27, 0.85);
+      border: 2px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      box-shadow: 0 18px 50px var(--shadow);
+      padding: 16px;
+    }
+
+    .hud {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+      font-size: 14px;
+    }
+
+    .stats {
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+    }
+
+    .label {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 999px;
+      padding: 6px 10px;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      background: #1b3a2f;
+      border-radius: 10px;
+      border: 2px solid rgba(255,255,255,0.08);
+      image-rendering: pixelated;
+    }
+
+    .message {
+      margin-top: 10px;
+      min-height: 22px;
+      color: var(--accent2);
+      font-weight: bold;
+      letter-spacing: 0.04em;
+    }
+  </style>
+</head>
+<body>
+  <div class="game-shell">
+    <div class="hud">
+      <div class="stats">
+        <div class="label">HP: <span id="hp">100/100</span></div>
+        <div class="label">XP: <span id="xp">0</span></div>
+        <div class="label">Level: <span id="level">1</span></div>
+      </div>
+      <div class="label">Goal: Defeat 3 slimes</div>
+    </div>
+    <canvas id="game" width="960" height="540"></canvas>
+    <div id="message" class="message"></div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const hpEl = document.getElementById('hp');
+    const xpEl = document.getElementById('xp');
+    const levelEl = document.getElementById('level');
+    const messageEl = document.getElementById('message');
+
+    const tileSize = 32;
+    const world = {
+      cols: 30,
+      rows: 17,
+      map: []
+    };
+
+    function makeMap() {
+      world.map = [];
+      for (let y = 0; y < world.rows; y++) {
+        const row = [];
+        for (let x = 0; x < world.cols; x++) {
+          if (x === 0 || y === 0 || x === world.cols - 1 || y === world.rows - 1) {
+            row.push(1);
+          } else if ((x > 3 && x < 7 && y > 2 && y < 11) || (x > 9 && x < 18 && y > 6 && y < 9)) {
+            row.push(1);
+          } else {
+            row.push(0);
+          }
+        }
+        world.map.push(row);
+      }
+
+      const trees = [
+        [2, 12], [5, 13], [7, 5], [11, 12], [14, 3], [18, 11], [22, 8], [24, 4], [26, 13], [20, 14]
+      ];
+      for (const [x, y] of trees) {
+        world.map[y][x] = 2;
+      }
+
+      const houses = [[15, 3], [21, 12]];
+      for (const [x, y] of houses) {
+        world.map[y][x] = 3;
+        world.map[y][x + 1] = 3;
+        world.map[y + 1][x] = 3;
+        world.map[y + 1][x + 1] = 3;
+      }
+    }
+
+    function inBounds(x, y) {
+      return x >= 0 && x < world.cols && y >= 0 && y < world.rows;
+    }
+
+    function isWall(x, y) {
+      if (!inBounds(x, y)) return true;
+      return world.map[y][x] !== 0;
+    }
+
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
+    }
+
+    const keys = {};
+    const mouse = { x: 0, y: 0, down: false };
+
+    window.addEventListener('keydown', (e) => {
+      keys[e.key.toLowerCase()] = true;
+      if (e.key === ' ') {
+        e.preventDefault();
+        player.attack();
+      }
+    });
+
+    window.addEventListener('keyup', (e) => {
+      keys[e.key.toLowerCase()] = false;
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      mouse.x = ((e.clientX - rect.left) / rect.width) * canvas.width;
+      mouse.y = ((e.clientY - rect.top) / rect.height) * canvas.height;
+    });
+
+    canvas.addEventListener('mousedown', () => {
+      mouse.down = true;
+      player.attack();
+    });
+
+    canvas.addEventListener('mouseup', () => {
+      mouse.down = false;
+    });
+
+    const player = {
+      x: 2.5,
+      y: 2.5,
+      r: 14,
+      speed: 2.2,
+      hp: 100,
+      maxHp: 100,
+      level: 1,
+      xp: 0,
+      nextXp: 15,
+      facing: { x: 1, y: 0 },
+      attackCooldown: 0,
+      invuln: 0,
+      hitFlash: 0,
+      attackRange: 42,
+      attackDamage: 20,
+      attack() {
+        if (this.attackCooldown > 0) return;
+        this.attackCooldown = 0.5;
+        const attackX = this.x + this.facing.x * (this.attackRange / tileSize);
+        const attackY = this.y + this.facing.y * (this.attackRange / tileSize);
+
+        let hit = false;
+        for (const enemy of enemies) {
+          if (enemy.dead) continue;
+          const dx = enemy.x - this.x;
+          const dy = enemy.y - this.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist <= 1.6) {
+            enemy.takeHit(this.attackDamage, this);
+            hit = true;
+          }
+        }
+
+        if (!hit) {
+          const dirs = [
+            { x: 0, y: -1 },
+            { x: 1, y: 0 },
+            { x: 0, y: 1 },
+            { x: -1, y: 0 }
+          ];
+          for (const d of dirs) {
+            const nx = this.x + d.x;
+            const ny = this.y + d.y;
+            for (const enemy of enemies) {
+              if (enemy.dead) continue;
+              const dist = Math.hypot(enemy.x - nx, enemy.y - ny);
+              if (dist < 0.9) {
+                enemy.takeHit(this.attackDamage, this);
+                hit = true;
+                break;
+              }
+            }
+            if (hit) break;
+          }
+        }
+
+        if (hit) {
+          messageEl.textContent = 'You strike the foe!';
+        } else {
+          messageEl.textContent = 'Your blade cuts the air.';
+        }
+      },
+      takeDamage(amount) {
+        if (this.invuln > 0) return;
+        this.hp = clamp(this.hp - amount, 0, this.maxHp);
+        this.invuln = 0.4;
+        this.hitFlash = 0.18;
+        if (this.hp <= 0) {
+          messageEl.textContent = 'You fall... the town needs a hero.';
+          this.hp = this.maxHp;
+          this.x = 2.5;
+          this.y = 2.5;
+          this.invuln = 1.2;
+          enemies.forEach((enemy) => {
+            if (enemy.dead) enemy.respawn();
+          });
+        }
+        updateHud();
+      },
+      gainXp(amount) {
+        this.xp += amount;
+        while (this.xp >= this.nextXp) {
+          this.xp -= this.nextXp;
+          this.level += 1;
+          this.nextXp = Math.floor(this.nextXp * 1.6) + 6;
+          this.maxHp += 15;
+          this.hp = this.maxHp;
+          this.attackDamage += 6;
+          messageEl.textContent = 'Level up!';
+        }
+        updateHud();
+      }
+    };
+
+    function updateHud() {
+      hpEl.textContent = `${Math.ceil(player.hp)}/${player.maxHp}`;
+      xpEl.textContent = `${player.xp}`;
+      levelEl.textContent = `${player.level}`;
+    }
+
+    class Enemy {
+      constructor(x, y, color, hp, xpValue, speed) {
+        this.x = x;
+        this.y = y;
+        this.color = color;
+        this.hp = hp;
+        this.maxHp = hp;
+        this.xpValue = xpValue;
+        this.speed = speed;
+        this.dead = false;
+        this.cooldown = 0;
+        this.respawnTimer = 0;
+        this.dir = { x: 1, y: 0 };
+      }
+
+      takeHit(amount, attacker) {
+        if (this.dead) return;
+        this.hp -= amount;
+        if (this.hp <= 0) {
+          this.dead = true;
+          this.respawnTimer = 5;
+          attacker.gainXp(this.xpValue);
+          messageEl.textContent = 'Enemy defeated!';
+        }
+      }
+
+      respawn() {
+        this.dead = false;
+        const pad = 2;
+        this.x = Math.random() * (world.cols - pad * 2) + pad;
+        this.y = Math.random() * (world.rows - pad * 2) + pad;
+        this.hp = this.maxHp;
+      }
+
+      update(dt) {
+        if (this.dead) {
+          this.respawnTimer -= dt;
+          if (this.respawnTimer <= 0) {
+            this.respawn();
+          }
+          return;
+        }
+
+        const dx = player.x - this.x;
+        const dy = player.y - this.y;
+        const dist = Math.hypot(dx, dy);
+
+        if (dist < 8) {
+          if (dist > 0.4) {
+            const nx = dx / dist;
+            const ny = dy / dist;
+            const nextX = this.x + nx * this.speed * dt;
+            const nextY = this.y + ny * this.speed * dt;
+
+            if (!isWall(Math.floor(nextX), Math.floor(this.y))) this.x = nextX;
+            if (!isWall(Math.floor(this.x), Math.floor(nextY))) this.y = nextY;
+          }
+
+          if (dist < 0.9 && this.cooldown <= 0) {
+            player.takeDamage(8 + player.level * 1.5);
+            this.cooldown = 0.9;
+          }
+        }
+
+        this.cooldown -= dt;
+        this.dir.x = dx >= 0 ? 1 : -1;
+        this.dir.y = dy >= 0 ? 1 : -1;
+      }
+
+      draw() {
+        if (this.dead) return;
+        const px = this.x * tileSize + tileSize / 2;
+        const py = this.y * tileSize + tileSize / 2;
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(px, py, 12, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#250e16';
+        ctx.fillRect(px - 15, py - 20, 30, 5);
+        ctx.fillStyle = '#5fe7a4';
+        ctx.fillRect(px - 15, py - 20, (this.hp / this.maxHp) * 30, 5);
+      }
+    }
+
+    const enemies = [
+      new Enemy(11.5, 9.5, '#ff8c69', 40, 8, 1.1),
+      new Enemy(22.5, 9.5, '#e76f51', 50, 12, 1.2),
+      new Enemy(17.5, 13.5, '#ef476f', 60, 15, 1.3),
+      new Enemy(7.5, 14.5, '#f4a261', 45, 10, 1.1)
+    ];
+
+    const npc = {
+      x: 24.5,
+      y: 3.5,
+      name: 'Village Elder',
+      talked: false,
+      draw() {
+        ctx.fillStyle = '#e9c46a';
+        ctx.fillRect(this.x * tileSize - 8, this.y * tileSize - 8, 16, 22);
+        ctx.fillStyle = '#000';
+        ctx.fillRect(this.x * tileSize - 12, this.y * tileSize - 12, 24, 4);
+      },
+      interact() {
+        if (this.talked) {
+          messageEl.textContent = 'The elder says: "The valley is safer now."';
+          return;
+        }
+        let deadCount = 0;
+        for (const enemy of enemies) if (enemy.dead) deadCount++;
+        if (deadCount >= 3) {
+          this.talked = true;
+          messageEl.textContent = 'The elder blesses you. Victory is yours!';
+        } else {
+          messageEl.textContent = 'The elder: "Defeat 3 slimes and return."';
+        }
+      }
+    };
+
+    function handleMovement(dt) {
+      let moveX = 0;
+      let moveY = 0;
+      if (keys['w'] || keys['arrowup']) moveY -= 1;
+      if (keys['s'] || keys['arrowdown']) moveY += 1;
+      if (keys['a'] || keys['arrowleft']) moveX -= 1;
+      if (keys['d'] || keys['arrowright']) moveX += 1;
+
+      const mag = Math.hypot(moveX, moveY) || 1;
+      if (moveX || moveY) {
+        const dx = (moveX / mag) * player.speed * dt * 60;
+        const dy = (moveY / mag) * player.speed * dt * 60;
+        const nextX = player.x + dx / tileSize;
+        const nextY = player.y + dy / tileSize;
+
+        const px = Math.floor(player.x);
+        const py = Math.floor(player.y);
+        const nx = Math.floor(nextX);
+        const ny = Math.floor(nextY);
+
+        if (!isWall(nx, py)) player.x = nextX;
+        if (!isWall(px, ny)) player.y = nextY;
+
+        player.facing.x = moveX !== 0 ? Math.sign(moveX) : player.facing.x;
+        player.facing.y = moveY !== 0 ? Math.sign(moveY) : player.facing.y;
+      }
+
+      player.x = clamp(player.x, 1.2, world.cols - 1.2);
+      player.y = clamp(player.y, 1.2, world.rows - 1.2);
+    }
+
+    function drawTile(x, y, type) {
+      const sx = x * tileSize;
+      const sy = y * tileSize;
+      if (type === 1) {
+        ctx.fillStyle = '#425d57';
+        ctx.fillRect(sx, sy, tileSize, tileSize);
+        ctx.fillStyle = '#372f2b';
+        ctx.fillRect(sx + 4, sy + 4, tileSize - 8, tileSize - 8);
+      } else if (type === 2) {
+        ctx.fillStyle = '#4d7c0f';
+        ctx.fillRect(sx, sy, tileSize, tileSize);
+        ctx.fillStyle = '#3b5c18';
+        ctx.fillRect(sx + 8, sy + 8, tileSize - 16, tileSize - 16);
+        ctx.fillStyle = '#5d3b1a';
+        ctx.fillRect(sx + 12, sy + 12, 8, 8);
+      } else if (type === 3) {
+        ctx.fillStyle = '#a86a3d';
+        ctx.fillRect(sx, sy, tileSize, tileSize);
+        ctx.fillStyle = '#d9b07c';
+        ctx.fillRect(sx + 5, sy + 5, tileSize - 10, tileSize - 10);
+      } else {
+        ctx.fillStyle = '#5f9f6d';
+        ctx.fillRect(sx, sy, tileSize, tileSize);
+      }
+    }
+
+    function drawWorld() {
+      for (let y = 0; y < world.rows; y++) {
+        for (let x = 0; x < world.cols; x++) {
+          drawTile(x, y, world.map[y][x]);
+        }
+      }
+    }
+
+    function drawPlayer() {
+      const px = player.x * tileSize;
+      const py = player.y * tileSize;
+
+      if (player.hitFlash > 0) {
+        ctx.fillStyle = '#ffdfdf';
+      } else {
+        ctx.fillStyle = '#64c0ff';
+      }
+      ctx.beginPath();
+      ctx.arc(px, py, 12, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = '#134e6f';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(px + player.facing.x * 17, py + player.facing.y * 17);
+      ctx.stroke();
+    }
+
+    function drawQuest() {
+      let defeated = 0;
+      for (const enemy of enemies) if (enemy.dead) defeated++;
+      ctx.fillStyle = 'rgba(10, 12, 20, 0.75)';
+      ctx.fillRect(20, 20, 220, 36);
+      ctx.fillStyle = '#fff';
+      ctx.font = '16px Arial';
+      ctx.fillText(`Slimes defeated: ${defeated}/3`, 34, 45);
+    }
+
+    function update(dt) {
+      player.attackCooldown = Math.max(0, player.attackCooldown - dt);
+      player.invuln = Math.max(0, player.invuln - dt);
+      player.hitFlash = Math.max(0, player.hitFlash - dt);
+      handleMovement(dt);
+
+      for (const enemy of enemies) {
+        enemy.update(dt);
+      }
+
+      const distToNpc = Math.hypot(player.x - npc.x, player.y - npc.y);
+      if (distToNpc < 1.4 && !keys['e']) {
+        // do nothing; E used for interaction below
+      }
+
+      if (keys['e']) {
+        if (distToNpc < 1.5) npc.interact();
+        keys['e'] = false;
+      }
+
+      updateHud();
+    }
+
+    function render() {
+      drawWorld();
+      npc.draw();
+      for (const enemy of enemies) enemy.draw();
+      drawPlayer();
+      drawQuest();
+    }
+
+    let last = performance.now();
+    function loop(ts) {
+      const dt = Math.min(0.033, (ts - last) / 1000);
+      last = ts;
+      update(dt);
+      render();
+      requestAnimationFrame(loop);
+    }
+
+    makeMap();
+    updateHud();
+    messageEl.textContent = 'WASD or arrows to move • Space or click to attack • E to talk';
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
